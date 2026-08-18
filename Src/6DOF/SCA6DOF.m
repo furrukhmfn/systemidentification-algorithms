@@ -1,0 +1,95 @@
+function SCA6DOF(inputData)
+% SCA6DOF  Sine Cosine Algorithm for 6-DOF aircraft parameter identification (60 derivatives).
+% States (12): [u, v, w, p, q, r, phi, theta, psi, xe, ye, h]
+% Inputs  (7): [delta_e, thrust, flapPos, flapNeg, flapDiff, aileron, rudder]
+
+arguments
+    inputData InputData
+end
+
+staticData = PrepareFlightData6DOF(inputData);
+
+Vb             = staticData.Vb;
+pqr            = staticData.pqr;
+phi_theta_psi  = staticData.phi_theta_psi;
+Xe             = staticData.Xe;
+Accels         = staticData.Accels;
+aileron        = staticData.aileron;
+rudder         = staticData.rudder;
+elevator       = staticData.elevator;
+flapPos        = staticData.flapPos;
+flapNeg        = staticData.flapNeg;
+flapDiff       = staticData.flapDiff;
+Ve             = staticData.Ve;
+pdot_qdot_rdot = staticData.pdot_qdot_rdot;
+
+lowerBounds   = inputData.LowerBounds;
+upperBounds   = inputData.UpperBounds;
+maxIterations = inputData.MaxIteration;
+populationSize = inputData.PopulationSize;
+parameterCount = inputData.ParameterCount;
+valueOfGravitationConstant = inputData.ValueOfGravitationConstant;
+
+a = 2;
+
+tic;
+globalFitnessMatrix = zeros(maxIterations, populationSize);
+globalrmse = [];
+
+population = InitializePopulation(populationSize, parameterCount, lowerBounds, upperBounds);
+globalBest = population(1, :);
+globalBestFitness = inf;
+
+%% Optimization Loop
+for iter = 1:maxIterations
+    fitnessValues = EvaluateFitness6DOF(population, staticData);
+
+    [localBestFitness, idx] = min(fitnessValues);
+    localBest = population(idx, :);
+
+    if localBestFitness < globalBestFitness
+        globalBest = localBest;
+        globalBestFitness = localBestFitness;
+    end
+
+    globalFitnessMatrix(iter, :) = fitnessValues;
+    globalrmse(iter) = mean(fitnessValues);
+
+    if iter > 1 && abs(globalrmse(iter) - globalrmse(iter - 1)) < 0.0001
+        disp("SCA6DOF: convergence criterion reached");
+        break;
+    end
+
+    % Trigonometric position update transitioning from exploration to exploitation
+    r1 = a - iter * (a / maxIterations);
+    for i = 1:populationSize
+        for j = 1:parameterCount
+            r2 = 2 * pi * rand();
+            r3 = 2 * rand();
+            r4 = rand();
+            if r4 < 0.5
+                population(i, j) = population(i, j) + r1 * sin(r2) * abs(r3 * globalBest(j) - population(i, j));
+            else
+                population(i, j) = population(i, j) + r1 * cos(r2) * abs(r3 * globalBest(j) - population(i, j));
+            end
+            population(i, j) = max(lowerBounds(j), min(upperBounds(j), population(i, j)));
+        end
+    end
+end
+
+bestSolution = globalBest;
+elapsedTime = toc;
+fprintf('SCA6DOF Execution time: %.5f seconds\n', elapsedTime);
+
+% Format continuous-time state-space matrices
+u = staticData.u_all(end);
+[A, B] = formatParameters6DOF(bestSolution, u);
+
+disp('=== SCA6DOF: Best Solution Found ===');
+fprintf('A Matrix (12x12):\n');  disp(A);
+fprintf('B Matrix (12x7):\n');   disp(B);
+
+save('SCA-6DOF-AlgoData.mat');
+save(inputData.WorkspaceFileName);
+
+end
